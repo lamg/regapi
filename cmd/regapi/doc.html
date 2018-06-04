@@ -1,0 +1,20 @@
+{{define "doc"}}
+<!DOCTYPE html>
+<html lang="es">
+	<head>
+		<meta charset="utf-8">
+		<title>API REST para SIGENU</title>
+	</head>
+	<body>
+		<h1>
+			Descripción de la API
+		</h1>
+		
+		<h2>Autenticar</h2>
+		<p>La ruta <code>/auth</code> responde a un POST con el cuerpo <code>{"user":"usuario", "pass":"contraseña"}</code> una cadena (JSON Web Token) que sirve para identificar al usuario si las credenciales proporcionadas en el POST son válidas. Esta cadena caduca a la hora de emitida. </p>
+
+		<h2>Evualuaciones</h2>
+		<p>La ruta <code>/eval</code> responde a un GET con el header "authHd" asociado a la cadena enviada por <code>/auth</code>, con las evaluaciones del estudiante al que identifica esa cadena</p>
+	</body>
+</html>
+{{end}}

@@ -7,6 +7,9 @@ import (
 	ld "github.com/lamg/ldaputil"
 	"github.com/rs/cors"
 	"html/template"
+	h "net/http"
+	"sort"
+	"strings"
 )
 
 type RegAPI struct {
@@ -14,6 +17,7 @@ type RegAPI struct {
 	cr       *JWTCrypt
 	rt       *mux.Router
 	ld       *ld.Ldap
+	tp       *template.Template
 	evalPath string
 	authPath string
 
@@ -24,7 +28,7 @@ func NewRegAPI(pgAddr, user, pass, rootHTML string,
 	ld *ld.Ldap) (p *RegAPI, e error) {
 	var db *sql.DB
 	db, e = sql.Open("postgres",
-		fmt.Sprintf("postgres://%s:%s@%s", user, pass, addr))
+		fmt.Sprintf("postgres://%s:%s@%s", user, pass, pgAddr))
 	var tp *template.Template
 	if e == nil {
 		tp, e = template.New("doc").ParseFiles(rootHTML)
@@ -35,22 +39,36 @@ func NewRegAPI(pgAddr, user, pass, rootHTML string,
 			rt: mux.NewRouter(),
 			cr: NewJWTCrypt(),
 			ld: ld,
+			tp: tp,
 		}
-		p.rt.HandleFunc("/auth", r.authHn).Methods(h.MethodPost)
-		p.rt.HandleFunc("/eval", r.evaluationsHn).Methods(h.MethodGet)
-		p.Handler = cors.AllowAll().Handler(d.rt)
+		p.authPath, p.evalPath = "/auth", "/eval"
+		p.rt.HandleFunc(p.authPath, p.authHn).Methods(h.MethodPost)
+		p.rt.HandleFunc(p.evalPath, p.evaluationsHn).Methods(h.MethodGet)
+		p.rt.HandleFunc("/", p.docHn)
+		p.Handler = cors.AllowAll().Handler(p.rt)
 	}
 	return
+}
+
+func (p *RegAPI) docHn(w h.ResponseWriter, r *h.Request) {
+	e := p.tp.ExecuteTemplate(w, "doc", struct {
+		AuthPath string
+		EvalPath string
+	}{
+		AuthPath: p.authPath,
+		EvalPath: p.evalPath,
+	})
+	writeErr(w, e)
 }
 
 func (p *RegAPI) authHn(w h.ResponseWriter, r *h.Request) {
 	c, e := credentials(r)
 	if e == nil {
-		e = d.Ld.Authenticate(c.User, c.Pass)
+		e = p.ld.Authenticate(c.User, c.Pass)
 	}
 	var s string
 	if e == nil {
-		s, e = d.cr.encrypt(c)
+		s, e = p.cr.encrypt(c)
 	}
 	if e == nil {
 		w.Write([]byte(s))
@@ -63,10 +81,10 @@ const (
 )
 
 func (p *RegAPI) evaluationsHn(w h.ResponseWriter, r *h.Request) {
-	usr, e := d.cr.decrypt(r)
+	usr, e := p.cr.decrypt(r)
 	var mp map[string][]string
 	if e == nil {
-		mp, e = d.Ld.FullRecordAcc(usr)
+		mp, e = p.ld.FullRecordAcc(usr)
 	}
 	var ci string
 	if e == nil {
@@ -80,7 +98,7 @@ func (p *RegAPI) evaluationsHn(w h.ResponseWriter, r *h.Request) {
 	}
 	var gs []StudentEvl
 	if e == nil {
-		gs, e = d.queryEvl(ci)
+		gs, e = p.queryEvl(ci)
 	}
 	if e == nil {
 		ev := sortAndRemDup(gs)
@@ -107,6 +125,13 @@ type EvYear struct {
 type EvPeriod struct {
 	Period string     `json:"period"`
 	Evs    []SubjEval `json:"evs"`
+}
+
+type StudentEvl struct {
+	SubjectName string `json:"subjectName"`
+	EvalValue   string `json:"evalValue"`
+	Period      string `json:"period"`
+	Year        string `json:"year"`
 }
 
 type ByYearPeriod []StudentEvl
@@ -175,5 +200,135 @@ func canUpdate(a []SubjEval, v SubjEval) (ok bool) {
 		a[i] = v
 	}
 	ok = f
+	return
+}
+
+func (p *RegAPI) queryEvl(idStudent string) (es []StudentEvl, e error) {
+	query := fmt.Sprintf("SELECT id_student FROM student WHERE "+
+		" identification = '%s'", idStudent)
+	// println("query: " + query)
+	// print("idStudent: ")
+	// println(idStudent)
+	var r *sql.Rows
+	r, e = p.db.Query(query)
+	var studDBId string
+	// print("error: ")
+	// println(e != nil)
+	ok := r.Next()
+	// print("ok: ")
+	// println(ok)
+	// rerr := r.Err()
+	// if rerr != nil {
+	// 	print("rerr: ")
+	// 	println(rerr.Error())
+	// }
+	if e == nil && ok {
+		e = r.Scan(&studDBId)
+	}
+	// print("studDBId: ")
+	// println(studDBId)
+	if e == nil {
+		r.Close()
+		query = fmt.Sprintf(
+			"SELECT evaluation_value_fk,matriculated_subject_fk "+
+				" FROM evaluation WHERE student_fk = '%s'", studDBId)
+		r, e = p.db.Query(query)
+	}
+	evalValId, matSubjId := make([]string, 0), make([]string, 0)
+	for i := 0; e == nil && r.Next(); i++ {
+		var ev, ms sql.NullString
+		e = r.Scan(&ev, &ms)
+		if e == nil && ev.Valid && ms.Valid {
+			evalValId, matSubjId = append(evalValId, ev.String),
+				append(matSubjId, ms.String)
+		}
+	}
+	// print("matSubjId: ")
+	// println(len(matSubjId))
+	// print("evalValId: ")
+	// println(len(evalValId))
+	// print("error: ")
+	// println(e != nil)
+	evalVal := make([]string, 0)
+	for i := 0; e == nil && i != len(evalValId); i++ {
+		r.Close()
+		query = fmt.Sprintf("SELECT value FROM evaluation_value WHERE "+
+			"id_evaluation_value = '%s'", evalValId[i])
+		// print("query evalValId: ")
+		// println(query)
+		r, e = p.db.Query(query)
+		var ev string
+		if e == nil && r.Next() {
+			e = r.Scan(&ev)
+		}
+		if e == nil {
+			evalVal = append(evalVal, ev)
+		}
+	}
+	// print("evalVal: ")
+	// println(len(evalVal))
+	subjId := make([]string, 0)
+	for i := 0; e == nil && i != len(matSubjId); i++ {
+		r.Close()
+		query = fmt.Sprintf(
+			"SELECT subject_fk FROM matriculated_subject WHERE "+
+				"matriculated_subject_id = '%s'", matSubjId[i])
+		r, e = p.db.Query(query)
+		var si string
+		if e == nil && r.Next() {
+			e = r.Scan(&si)
+		}
+		if e == nil {
+			subjId = append(subjId, si)
+		}
+	}
+	// print("subjId: ")
+	// println(len(subjId))
+	subjNameId, subjPeriod, subjYear := make([]string, 0),
+		make([]string, 0), make([]string, 0)
+	for i := 0; e == nil && i != len(subjId); i++ {
+		r.Close()
+		query = fmt.Sprintf(
+			"SELECT subject_name_fk, period, year FROM subject WHERE "+
+				"subject_id = '%s'", subjId[i])
+		r, e = p.db.Query(query)
+		var sni, period, year string
+		if e == nil && r.Next() {
+			e = r.Scan(&sni, &period, &year)
+		}
+		if e == nil {
+			subjNameId, subjPeriod, subjYear =
+				append(subjNameId, sni),
+				append(subjPeriod, period),
+				append(subjYear, year)
+		}
+	}
+	// print("subjNameId: ")
+	// println(len(subjNameId))
+	subjName := make([]string, 0)
+	for i := 0; e == nil && i != len(subjNameId); i++ {
+		r.Close()
+		query = fmt.Sprintf("SELECT name FROM subject_name WHERE "+
+			"subject_name_id = '%s'", subjNameId[i])
+		r, e = p.db.Query(query)
+		var sn string
+		if e == nil && r.Next() {
+			e = r.Scan(&sn)
+		}
+		if e == nil {
+			subjName = append(subjName, sn)
+		}
+	}
+	// print("subjName: ")
+	// println(len(subjName))
+	es = make([]StudentEvl, len(subjName))
+	for i := 0; e == nil && i != len(subjName); i++ {
+		es[i] = StudentEvl{
+			SubjectName: subjName[i],
+			Period:      subjPeriod[i],
+			Year:        subjYear[i],
+			EvalValue:   evalVal[i],
+		}
+	}
 	return
 }
