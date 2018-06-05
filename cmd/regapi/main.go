@@ -11,14 +11,11 @@ import (
 )
 
 func main() {
-	var addr, user, pass, srv, tmpl string
-	flag.StringVar(&addr, "a", "", "Dirección del servidor")
-	flag.StringVar(&user, "u", "", "Usuario")
-	flag.StringVar(&pass, "p", "", "Contraseña")
-	flag.StringVar(&srv, "s", ":8080",
-		"Dirección para servir la API")
+	var sigAddr, srv, tmpl string
+	flag.StringVar(&srv, "s", ":8081", "Dirección para servir la API")
 	flag.StringVar(&tmpl, "l", "",
 		"Camino de la plantilla de la documentación")
+	flag.StringVar(&sigAddr, "a", "", "URL donde está sigapi")
 	var adAddr, suff, bdn, adUser, adPass string
 	flag.StringVar(&adAddr, "ad", "", "LDAP server address")
 	flag.StringVar(&suff, "sf", "", "LDAP server account suffix")
@@ -27,7 +24,7 @@ func main() {
 	flag.StringVar(&adPass, "adp", "", "Contraseña del AD")
 	flag.Parse()
 	ld := ldaputil.NewLdapWithAcc(adAddr, suff, bdn, adUser, adPass)
-	r, e := regapi.NewRegAPI(addr, user, pass, tmpl, ld)
+	r, e := regapi.NewRegAPI(sigAddr, tmpl, ld)
 	if e == nil {
 		s := h.Server{
 			ReadTimeout:  5 * time.Second,

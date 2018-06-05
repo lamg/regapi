@@ -1,11 +1,23 @@
 package main
 
+import (
+	"bytes"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"github.com/lamg/regapi"
+	"io/ioutil"
+	"log"
+	h "net/http"
+)
+
 func main() {
-	var addr, user, pass string
+	var addr, user, pass, evals string
 	flag.StringVar(&addr, "a", "", "regapi server address")
 	flag.StringVar(&user, "u", "", "user name")
 	flag.StringVar(&pass, "p", "", "password")
-
+	flag.StringVar(&evals, "e", "",
+		"JWT sent by auth to get user evaluations")
 	flag.Parse()
 	tr := &h.Transport{
 		Proxy: nil,
@@ -18,26 +30,27 @@ func main() {
 	}
 	var bs []byte
 	bs, e = json.Marshal(c)
-	var rq *h.Request
-	if e == nil {
-		bf := bytes.NewReader(bs)
-		rq, e = h.NewRequest(h.MethodPost, addr+"/auth", bf)
-	}
 	var r *h.Response
-	if e == nil {
-		r, e = h.DefaultClient.Do(rq)
-	}
-	var q *h.Request
-	if e == nil {
+
+	if e == nil && evals == "" {
+		var rq *h.Request
+		if e == nil {
+			bf := bytes.NewReader(bs)
+			rq, e = h.NewRequest(h.MethodPost, addr+"/auth", bf)
+		}
+		if e == nil {
+			r, e = h.DefaultClient.Do(rq)
+		}
+	} else if e == nil {
+		var q *h.Request
 		q, e = h.NewRequest(h.MethodGet, addr+"/eval", nil)
-	}
-	if e == nil {
 		q.Header.Set(regapi.AuthHd, evals)
 		r, e = h.DefaultClient.Do(q)
 		if e == nil && r.StatusCode != h.StatusOK {
 			e = fmt.Errorf("Error: %d", r.StatusCode)
 		}
 	}
+
 	if e != nil {
 		if r != nil {
 			log.Fatalf("error: %s code: %d", e.Error(), r.StatusCode)
@@ -52,6 +65,7 @@ func main() {
 func printBody(r *h.Response) {
 	body, e := ioutil.ReadAll(r.Body)
 	if e == nil {
+		r.Body.Close()
 		fmt.Println(string(body))
 	}
 }
